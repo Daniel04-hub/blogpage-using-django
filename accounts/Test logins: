@@ -1,0 +1,9 @@
+Test logins:
+
+. Regular user: user1@example.com /
+User@12345 (should enter admin read-
+only)
+. Author: author1@example.com /
+Author@12345 (can edit own posts)
+. Admin: admin@example.com /
+Admin@12345 (full access)
