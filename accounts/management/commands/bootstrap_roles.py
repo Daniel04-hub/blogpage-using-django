@@ -23,7 +23,7 @@ class Command(BaseCommand):
         author_group, _ = Group.objects.get_or_create(name="Author")
         user_group, _ = Group.objects.get_or_create(name="User")
 
-        # Assign permissions (basic: authors get add/change Post; admin gets all; user none)
+        # Assign permissions
         from django.contrib.contenttypes.models import ContentType
         from blog.models import Post, Comment
         post_ct = ContentType.objects.get_for_model(Post)
@@ -32,10 +32,22 @@ class Command(BaseCommand):
         post_perms = Permission.objects.filter(content_type=post_ct)
         comment_perms = Permission.objects.filter(content_type=comment_ct)
 
+        # Specific codenames
+        add_post = post_perms.filter(codename="add_post").first()
+        change_post = post_perms.filter(codename="change_post").first()
+        delete_post = post_perms.filter(codename="delete_post").first()
+        publish_post = post_perms.filter(codename="publish_post").first()
+
         # Admin: all model permissions
         admin_group.permissions.set(list(post_perms) + list(comment_perms))
-        # Author: only add/change/delete own posts logically (Django can't enforce own automatically, so we give add/change/delete; object logic in admin limits it)
-        author_group.permissions.set(post_perms)
+        # Author: add/change/delete posts (ownership enforced in views/admin); no publish by default
+        author_perms = [p for p in [add_post, change_post, delete_post] if p]
+        author_group.permissions.set(author_perms)
+        
+        # Editor: change/publish any post (optional role for publishing workflow)
+        editor_group, _ = Group.objects.get_or_create(name="Editor")
+        editor_perms = [p for p in [change_post, publish_post] if p]
+        editor_group.permissions.set(editor_perms)
         # User: read-only via API (no perms assigned)
         user_group.permissions.clear()
 
@@ -57,7 +69,7 @@ class Command(BaseCommand):
                     "is_author": True,
                 })
                 user.groups.add(author_group)
-            else:  # regular user
+            elif role == "user":  # regular user
                 user, created = User.objects.get_or_create(email=email, defaults={
                     "name": email.split("@")[0].title(),
                     "is_staff": False,
@@ -65,6 +77,14 @@ class Command(BaseCommand):
                     "is_author": False,
                 })
                 user.groups.add(user_group)
+            else:
+                # Unknown role placeholder
+                user, created = User.objects.get_or_create(email=email, defaults={
+                    "name": email.split("@")[0].title(),
+                    "is_staff": False,
+                    "is_superuser": False,
+                    "is_author": False,
+                })
 
             user.set_password(pwd)
             user.is_active = True

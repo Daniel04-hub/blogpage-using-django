@@ -15,7 +15,7 @@ class BaseModel(models.Model):
 
     def soft_delete(self):
         self.deleted_at = timezone.now()
-        self.save(update_fields=["deleted_at"])
+        self.save(update_fields=["deleted_at", "updated_at"])
 
 
 class Post(BaseModel):
@@ -36,7 +36,12 @@ class Post(BaseModel):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
 
     def __str__(self):
-        return self.title
+        return f"{self.title} ({self.status})"
+
+    class Meta:
+        permissions = [
+            ("publish_post", "Can publish post"),
+        ]
 
 
 class Comment(BaseModel):

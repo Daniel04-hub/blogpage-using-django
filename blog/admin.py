@@ -15,12 +15,14 @@ class CommentInline(admin.TabularInline):
     readonly_fields = ('created_at', 'updated_at')
 
     def has_add_permission(self, request, obj):
-        # Allow any authenticated active user to add inline comments on a post
-        return request.user.is_authenticated and request.user.is_active
+        # Allow comments only on published posts by authenticated active users
+        if not (request.user.is_authenticated and request.user.is_active):
+            return False
+        if obj is None:
+            return False
+        return getattr(obj, "status", None) == "published"
 
-
-
-# POST ADMIN (like Filament PostResource)
+# POST ADMIN 
 
 class PostAdmin(admin.ModelAdmin):
 

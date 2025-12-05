@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import permission_required
 from django.contrib.auth import authenticate, login
 from .models import Post, Comment
 
@@ -41,12 +42,86 @@ def post_detail_api(request, pk):
 
 @csrf_exempt
 @require_POST
+@login_required
+@permission_required("blog.add_post", raise_exception=True)
+def create_post_api(request):
+    title = (request.POST.get("title") or "").strip()
+    content = (request.POST.get("content") or "").strip()
+    if not title or not content:
+        return JsonResponse({"error": "title and content required"}, status=400)
+    post = Post.objects.create(
+        author=request.user,
+        title=title,
+        content=content,
+        status="draft",
+        created_by=request.user.email,
+        updated_by=request.user.email,
+    )
+    return JsonResponse({"id": post.id, "status": post.status}, status=201)
+
+@csrf_exempt
+@require_POST
+@login_required
+def update_post_api(request, pk):
+    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    if not (
+        request.user.is_superuser
+        or request.user.has_perm("blog.change_post")
+        or post.author_id == request.user.id
+    ):
+        return JsonResponse({"error": "forbidden"}, status=403)
+    title = request.POST.get("title")
+    content = request.POST.get("content")
+    status = request.POST.get("status")
+    if title is not None:
+        post.title = title
+    if content is not None:
+        post.content = content
+    if status in {"draft", "published", "archived"}:
+        post.status = status
+    post.updated_by = request.user.email
+    post.save()
+    return JsonResponse({"id": post.id, "status": post.status})
+
+@csrf_exempt
+@require_POST
+@login_required
+def delete_post_api(request, pk):
+    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    if not (
+        request.user.is_superuser
+        or request.user.has_perm("blog.delete_post")
+        or post.author_id == request.user.id
+    ):
+        return JsonResponse({"error": "forbidden"}, status=403)
+    post.soft_delete()
+    post.updated_by = request.user.email
+    post.save(update_fields=["updated_by", "deleted_at", "updated_at"])
+    return JsonResponse({"id": post.id, "deleted": True})
+
+@csrf_exempt
+@require_POST
+@login_required
+@permission_required("blog.publish_post", raise_exception=True)
+def publish_post_api(request, pk):
+    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    if not (request.user.is_superuser or post.author_id == request.user.id or request.user.has_perm("blog.publish_post")):
+        return JsonResponse({"error": "forbidden"}, status=403)
+    post.status = "published"
+    post.updated_by = request.user.email
+    post.save(update_fields=["status", "updated_by", "updated_at"])
+    return JsonResponse({"id": post.id, "status": post.status})
+
+@csrf_exempt
+@require_POST
 def add_comment_api(request, pk):
     # Require authenticated user
     if not request.user.is_authenticated or not request.user.is_active:
         return JsonResponse({"error": "authentication required"}, status=401)
 
     post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    if post.status != "published":
+        return JsonResponse({"error": "comments allowed only on published posts"}, status=403)
     content = (request.POST.get('content') or '').strip()
     if not content:
         return JsonResponse({"error": "content required"}, status=400)
@@ -66,35 +141,7 @@ def add_comment_api(request, pk):
         "created_at": c.created_at,
     }, status=201)
 
-@csrf_exempt
-@require_POST
-def reply_comment_api(request, comment_id):
-    # Require authenticated user
-    if not request.user.is_authenticated or not request.user.is_active:
-        return JsonResponse({"error": "authentication required"}, status=401)
-
-    parent = get_object_or_404(Comment, pk=comment_id, deleted_at__isnull=True)
-    post = parent.post
-    content = (request.POST.get('content') or '').strip()
-    if not content:
-        return JsonResponse({"error": "content required"}, status=400)
-
-    c = Comment.objects.create(
-        post=post,
-        user=request.user,
-        parent=parent,
-        content=content,
-        created_by=request.user.email,
-        updated_by=request.user.email,
-    )
-    return JsonResponse({
-        "id": c.id,
-        "post_id": post.id,
-        "parent_id": parent.id,
-        "user": request.user.email,
-        "content": c.content,
-        "created_at": c.created_at,
-    }, status=201)
+# Reply-to-comment endpoint removed per requirement: only top-level comments are allowed.
 
 #-> session login by the middleware
 @csrf_exempt#-> middleware actively global

@@ -75,14 +75,12 @@ WSGI_APPLICATION = 'blogpage.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+# Use SQLite for local development to avoid Postgres setup issues.
+# Switch to Postgres via environment-specific settings when required.
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'blogpage',
-        'USER': 'daniel',
-        'PASSWORD': 'daniel',
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
 
