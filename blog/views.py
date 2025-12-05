@@ -141,8 +141,6 @@ def add_comment_api(request, pk):
         "created_at": c.created_at,
     }, status=201)
 
-# Reply-to-comment endpoint removed per requirement: only top-level comments are allowed.
-
 #-> session login by the middleware
 @csrf_exempt#-> middleware actively global
 @require_POST
@@ -156,6 +154,3 @@ def session_login_api(request):
     login(request, user)
     return JsonResponse({"status": "ok", "user": username})
 
-
-# middleware handles cookie based session 
-# authenticateview message 
