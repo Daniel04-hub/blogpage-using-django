@@ -54,13 +54,15 @@ class PostAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None):
         if request.user.is_superuser:
             return True
+        # Authors can always access the change list to add new posts.
         if obj is None:
             return request.user.is_author
-        # Allow authenticated users to open the change view to add inline comments.
-        # Post fields stay read-only via get_readonly_fields for non-authors.
-        if request.user.is_authenticated and request.user.is_active:
+        # An author can change their own post.
+        if request.user.is_author and obj.author == request.user:
             return True
-        return request.user.is_author and obj.author == request.user
+        # Any other authenticated user can view the change page (to see inlines),
+        # but get_readonly_fields will prevent them from editing the post itself.
+        return request.user.is_authenticated and request.user.is_active
 
     def has_delete_permission(self, request, obj=None):
         if request.user.is_superuser:
