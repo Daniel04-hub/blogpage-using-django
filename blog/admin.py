@@ -6,8 +6,7 @@ from . import admin_views
 from .models import Post, Comment
 
 
-
-# Inline comments (Filament Relation Manager equivalent)
+# Inline comments
 
 class CommentInline(admin.TabularInline):
     model = Comment
@@ -38,47 +37,47 @@ class PostAdmin(admin.ModelAdmin):
         return qs
 #-> permission for the  regular user who can edit post
     def get_readonly_fields(self, request, obj=None):
-        # Non-author (regular user) always read-only
-        if not request.user.is_superuser and not request.user.is_author:
-            return [f.name for f in self.model._meta.fields]
-        # Author viewing someone else's post: all fields readonly
-        if not request.user.is_superuser and obj and obj.author != request.user:
-            return [f.name for f in self.model._meta.fields]
+        ro = getattr(request, "policy", None)
+        if ro:
+            fields = ro.readonly_post_fields(obj=obj, model=self.model)
+            if fields:
+                return fields
         return super().get_readonly_fields(request, obj)
 
     def has_view_permission(self, request, obj=None):
-        # -> Allow any active user to view (regular users read-only)
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_view_post(obj) if ro else (request.user.is_authenticated and request.user.is_active)
 
 #-> permission for the superuser who can edit post
     def has_change_permission(self, request, obj=None):
+        ro = getattr(request, "policy", None)
+        if ro:
+            return ro.can_change_post(obj)
+        # Fallback
         if request.user.is_superuser:
             return True
-        # Authors can always access the change list to add new posts.
         if obj is None:
             return request.user.is_author
-        # An author can change their own post.
         if request.user.is_author and obj.author == request.user:
             return True
-        # Any other authenticated user can view the change page (to see inlines),
-        # but get_readonly_fields will prevent them from editing the post itself.
         return request.user.is_authenticated and request.user.is_active
 
     def has_delete_permission(self, request, obj=None):
-        if request.user.is_superuser:
-            return True
-        if obj is None:
-            return request.user.is_author
-        return request.user.is_author and obj.author == request.user
+        ro = getattr(request, "policy", None)
+        return ro.can_delete_post(obj) if ro else (
+            True if request.user.is_superuser else (
+                request.user.is_author and (obj is None or obj.author == request.user)
+            )
+        )
 
     def has_add_permission(self, request):
-        if request.user.is_superuser:
-            return True
-        return request.user.is_author
+        ro = getattr(request, "policy", None)
+        return ro.can_add_post() if ro else (request.user.is_superuser or request.user.is_author)
 
     # Ensure app and models appear for authenticated users (read-only users included)
     def has_module_permission(self, request):
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_view_post() if ro else (request.user.is_authenticated and request.user.is_active)
 
     # Auto-fill created_by / updated_by
     def save_model(self, request, obj, form, change):
@@ -101,7 +100,10 @@ class PostAdmin(admin.ModelAdmin):
     # Soft delete action
     def soft_delete_posts(self, request, queryset):
         allowed = queryset
-        if not request.user.is_superuser:
+        ro = getattr(request, "policy", None)
+        if ro and not ro.is_superuser():
+            allowed = queryset.filter(author=request.user)
+        elif not getattr(request.user, "is_superuser", False):
             allowed = queryset.filter(author=request.user)
         for post in allowed:
             post.soft_delete()
@@ -111,7 +113,10 @@ class PostAdmin(admin.ModelAdmin):
     # Publish action
     def publish_posts(self, request, queryset):
         allowed = queryset
-        if not request.user.is_superuser:
+        ro = getattr(request, "policy", None)
+        if ro and not ro.is_superuser():
+            allowed = queryset.filter(author=request.user)
+        elif not getattr(request.user, "is_superuser", False):
             allowed = queryset.filter(author=request.user)
         allowed.update(status='published')
         self.message_user(request, "Selected posts published.")
@@ -128,43 +133,45 @@ class CommentAdmin(admin.ModelAdmin):
     search_fields = ('content',)
 
     def get_readonly_fields(self, request, obj=None):
-        # Regular users: read-only always
-        if not request.user.is_superuser and not request.user.is_author:
-            return [f.name for f in self.model._meta.fields]
-        # Authors: read-only when viewing comments not authored by them
-        if not request.user.is_superuser and obj and obj.user != request.user:
-            return [f.name for f in self.model._meta.fields]
+        ro = getattr(request, "policy", None)
+        if ro:
+            fields = ro.readonly_comment_fields(obj=obj, model=self.model)
+            if fields:
+                return fields
         return super().get_readonly_fields(request, obj)
 
     def has_view_permission(self, request, obj=None):
-        # Any authenticated active user can view comments
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_view_comment(obj) if ro else (request.user.is_authenticated and request.user.is_active)
 
     def has_add_permission(self, request):
-        # Allow any authenticated active user to add a comment via admin
-        # Object-level ownership is still enforced on change/delete
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_add_comment() if ro else (request.user.is_authenticated and request.user.is_active)
 
     def has_change_permission(self, request, obj=None):
+        ro = getattr(request, "policy", None)
+        if ro:
+            return ro.can_change_comment(obj)
         if request.user.is_superuser:
             return True
         if obj is None:
-            # Listing/edit form access only if user is author/admin; otherwise handled by readonly fields
             return request.user.is_author or (request.user.is_authenticated and request.user.is_active)
-        # Authors can edit only their own comments
         return request.user.is_author and obj.user == request.user
 
     def has_delete_permission(self, request, obj=None):
+        ro = getattr(request, "policy", None)
+        if ro:
+            return ro.can_delete_comment(obj)
         if request.user.is_superuser:
             return True
         if obj is None:
             return request.user.is_author
-        # Authors can delete only their own comments; regular users cannot delete
         return request.user.is_author and obj.user == request.user
 
     # Ensure app and models appear for authenticated users (read-only users included)
     def has_module_permission(self, request):
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_view_comment() if ro else (request.user.is_authenticated and request.user.is_active)
 
     # Auto-fill created_by / updated_by
     def save_model(self, request, obj, form, change):
@@ -175,7 +182,7 @@ class CommentAdmin(admin.ModelAdmin):
 
 
 
-# CUSTOM ADMIN SITE (like Filament custom pages)
+# CUSTOM ADMIN SITE
 
 class MyAdminSite(admin.AdminSite):
     site_header = "Blog Admin Panel"
@@ -184,7 +191,8 @@ class MyAdminSite(admin.AdminSite):
 
     # Allow any active authenticated user to access admin index/login
     def has_permission(self, request):
-        return request.user.is_authenticated and request.user.is_active
+        ro = getattr(request, "policy", None)
+        return ro.can_access_admin() if ro else (request.user.is_authenticated and request.user.is_active)
 
     def get_urls(self):
         urls = super().get_urls()

@@ -4,6 +4,7 @@ from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.decorators import permission_required
+from accounts.policies import Policy
 from django.contrib.auth import authenticate, login
 from .models import Post, Comment
 
@@ -45,6 +46,9 @@ def post_detail_api(request, pk):
 @login_required
 @permission_required("blog.add_post", raise_exception=True)
 def create_post_api(request):
+    # Align with policy chain (superuser first, then author)
+    if not Policy(request.user).can_add_post():
+        return JsonResponse({"error": "forbidden"}, status=403)
     title = (request.POST.get("title") or "").strip()
     content = (request.POST.get("content") or "").strip()
     if not title or not content:
@@ -64,11 +68,7 @@ def create_post_api(request):
 @login_required
 def update_post_api(request, pk):
     post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
-    if not (
-        request.user.is_superuser
-        or request.user.has_perm("blog.change_post")
-        or post.author_id == request.user.id
-    ):
+    if not Policy(request.user).can_change_post(post):
         return JsonResponse({"error": "forbidden"}, status=403)
     title = request.POST.get("title")
     content = request.POST.get("content")
@@ -88,11 +88,7 @@ def update_post_api(request, pk):
 @login_required
 def delete_post_api(request, pk):
     post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
-    if not (
-        request.user.is_superuser
-        or request.user.has_perm("blog.delete_post")
-        or post.author_id == request.user.id
-    ):
+    if not Policy(request.user).can_delete_post(post):
         return JsonResponse({"error": "forbidden"}, status=403)
     post.soft_delete()
     post.updated_by = request.user.email
@@ -105,7 +101,7 @@ def delete_post_api(request, pk):
 @permission_required("blog.publish_post", raise_exception=True)
 def publish_post_api(request, pk):
     post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
-    if not (request.user.is_superuser or post.author_id == request.user.id or request.user.has_perm("blog.publish_post")):
+    if not Policy(request.user).is_superuser() and post.author_id != request.user.id and not request.user.has_perm("blog.publish_post"):
         return JsonResponse({"error": "forbidden"}, status=403)
     post.status = "published"
     post.updated_by = request.user.email
@@ -115,8 +111,9 @@ def publish_post_api(request, pk):
 @csrf_exempt
 @require_POST
 def add_comment_api(request, pk):
-    # Require authenticated user
-    if not request.user.is_authenticated or not request.user.is_active:
+    # Require authenticated active per policy chain
+    p = Policy(request.user)
+    if not p.is_authenticated_active():
         return JsonResponse({"error": "authentication required"}, status=401)
 
     post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)

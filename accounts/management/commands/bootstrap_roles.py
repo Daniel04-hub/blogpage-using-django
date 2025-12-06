@@ -48,8 +48,11 @@ class Command(BaseCommand):
         editor_group, _ = Group.objects.get_or_create(name="Editor")
         editor_perms = [p for p in [change_post, publish_post] if p]
         editor_group.permissions.set(editor_perms)
-        # User: read-only via API (no perms assigned)
-        user_group.permissions.clear()
+        # User: CRUD comments only (add/change/delete comment)
+        add_comment = comment_perms.filter(codename="add_comment").first()
+        change_comment = comment_perms.filter(codename="change_comment").first()
+        delete_comment = comment_perms.filter(codename="delete_comment").first()
+        user_group.permissions.set([p for p in [add_comment, change_comment, delete_comment] if p])
 
         created_accounts = []
         for role, email, pwd in ROLE_USERS:
