@@ -7,8 +7,6 @@ class Role(str, Enum):
     ADMIN = "admin"
     AUTHOR = "author"
     USER = "user"  # authenticated non-author
-    ANON = "anon"  # unauthenticated
-
 
 class Permission(str, Enum):
     ADMIN_ACCESS = "admin.access"
@@ -53,8 +51,6 @@ class Policy:
 
     # Role resolution
     def role(self) -> Role:
-        if not bool(getattr(self.user, "is_authenticated", False)) or not bool(getattr(self.user, "is_active", False)):
-            return Role.ANON
         if bool(getattr(self.user, "is_superuser", False)):
             return Role.ADMIN
         if bool(getattr(self.user, "is_author", False)):
@@ -63,6 +59,9 @@ class Policy:
 
     # Permission check helper (admins get all by grant table)
     def has(self, perm: Permission) -> bool:
+        # Unauthenticated or inactive users have no permissions
+        if not bool(getattr(self.user, "is_authenticated", False)) or not bool(getattr(self.user, "is_active", False)):
+            return False
         return perm in ROLE_GRANTS.get(self.role(), set())
 
     # Generic object-ownership helper
@@ -105,7 +104,7 @@ class Policy:
         if self.role() is Role.ADMIN:
             return []
         # Non-authenticated and normal users: always readonly
-        if self.role() in {Role.ANON, Role.USER}:
+        if (not bool(getattr(self.user, "is_authenticated", False)) or not bool(getattr(self.user, "is_active", False))) or self.role() is Role.USER:
             return [f.name for f in model._meta.fields] if model else []
         # Author: readonly if editing someone else's post
         if obj is not None and not self.is_owner(obj, "author"):
