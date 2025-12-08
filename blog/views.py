@@ -3,8 +3,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.decorators import permission_required
-from accounts.policies import Policy
+from accounts.policies import Policy  # middleware attaches request.policy
 from django.contrib.auth import authenticate, login
 from .models import Post, Comment
 
@@ -51,10 +50,9 @@ def post_detail_api(request, pk):
 @csrf_exempt
 @require_POST
 @login_required
-@permission_required("blog.add_post", raise_exception=True)
 def create_post_api(request):
-    # Align with policy chain (superuser first, then author)
-    if not Policy(request.user).can_add_post():
+    # Use request.policy RBAC (admin full access; author can add)
+    if not getattr(request, "policy", Policy(request.user)).can_add_post():
         return json_error("forbidden", 403)
     title = (request.POST.get("title") or "").strip()
     content = (request.POST.get("content") or "").strip()
@@ -75,7 +73,7 @@ def create_post_api(request):
 @login_required
 def update_post_api(request, pk):
     post = get_post_active(pk)
-    if not Policy(request.user).can_change_post(post):
+    if not getattr(request, "policy", Policy(request.user)).can_change_post(post):
         return json_error("forbidden", 403)
     title = request.POST.get("title")
     content = request.POST.get("content")
@@ -95,7 +93,7 @@ def update_post_api(request, pk):
 @login_required
 def delete_post_api(request, pk):
     post = get_post_active(pk)
-    if not Policy(request.user).can_delete_post(post):
+    if not getattr(request, "policy", Policy(request.user)).can_delete_post(post):
         return json_error("forbidden", 403)
     post.soft_delete()
     post.updated_by = request.user.email
@@ -105,10 +103,11 @@ def delete_post_api(request, pk):
 @csrf_exempt
 @require_POST
 @login_required
-@permission_required("blog.publish_post", raise_exception=True)
 def publish_post_api(request, pk):
     post = get_post_active(pk)
-    if not Policy(request.user).is_superuser() and post.author_id != request.user.id and not request.user.has_perm("blog.publish_post"):
+    # Publish restricted: admin or author of the post (simple rule)
+    p = getattr(request, "policy", Policy(request.user))
+    if not (p.is_superuser() or post.author_id == request.user.id):
         return json_error("forbidden", 403)
     post.status = "published"
     post.updated_by = request.user.email
@@ -119,8 +118,8 @@ def publish_post_api(request, pk):
 @require_POST
 def add_comment_api(request, pk):
     # Require authenticated active per policy chain
-    p = Policy(request.user)
-    if not p.is_authenticated_active():
+    p = getattr(request, "policy", Policy(request.user))
+    if not p.can_add_comment():
         return json_error("authentication required", 401)
     post = get_post_active(pk)
     if post.status != "published":

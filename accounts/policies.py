@@ -1,94 +1,121 @@
 from dataclasses import dataclass
-from typing import Optional
+from enum import Enum
+from typing import Dict, Set
+
+
+class Role(str, Enum):
+    ADMIN = "admin"
+    AUTHOR = "author"
+    USER = "user"  # authenticated non-author
+    ANON = "anon"  # unauthenticated
+
+
+class Permission(str, Enum):
+    ADMIN_ACCESS = "admin.access"
+    POST_VIEW = "post.view"
+    POST_ADD = "post.add"
+    POST_CHANGE_OWN = "post.change.own"
+    POST_DELETE_OWN = "post.delete.own"
+    COMMENT_VIEW = "comment.view"
+    COMMENT_ADD = "comment.add"
+    COMMENT_CHANGE_OWN = "comment.change.own"
+    COMMENT_DELETE_OWN = "comment.delete.own"
+
+
+# Central role -> permission grants (coarse-grained)
+ROLE_GRANTS: Dict[Role, Set[Permission]] = {
+    Role.ADMIN: set(p for p in Permission),  # full access
+    Role.AUTHOR: {
+        Permission.ADMIN_ACCESS,
+        Permission.POST_VIEW,
+        Permission.POST_ADD,
+        Permission.POST_CHANGE_OWN,
+        Permission.POST_DELETE_OWN,
+        Permission.COMMENT_VIEW,
+        Permission.COMMENT_ADD,
+        Permission.COMMENT_CHANGE_OWN,
+        Permission.COMMENT_DELETE_OWN,
+    },
+    Role.USER: {
+        Permission.ADMIN_ACCESS,
+        Permission.POST_VIEW,
+        Permission.COMMENT_VIEW,
+        Permission.COMMENT_ADD,
+        Permission.COMMENT_CHANGE_OWN,
+        Permission.COMMENT_DELETE_OWN,
+    },
+}
 
 
 @dataclass
 class Policy:
     user: any
 
-    # Base checks
-    def is_authenticated_active(self) -> bool:
-        return bool(getattr(self.user, "is_authenticated", False)) and bool(getattr(self.user, "is_active", False))
+    # Role resolution
+    def role(self) -> Role:
+        if not bool(getattr(self.user, "is_authenticated", False)) or not bool(getattr(self.user, "is_active", False)):
+            return Role.ANON
+        if bool(getattr(self.user, "is_superuser", False)):
+            return Role.ADMIN
+        if bool(getattr(self.user, "is_author", False)):
+            return Role.AUTHOR
+        return Role.USER
 
-    def is_superuser(self) -> bool:
-        return bool(getattr(self.user, "is_superuser", False))
+    # Permission check helper (admins get all by grant table)
+    def has(self, perm: Permission) -> bool:
+        return perm in ROLE_GRANTS.get(self.role(), set())
 
-    def is_author(self) -> bool:
-        return bool(getattr(self.user, "is_author", False))
+    # Generic object-ownership helper
+    def is_owner(self, obj, owner_attr: str) -> bool:
+        return obj is not None and getattr(obj, owner_attr, None) == self.user
 
-    # Admin access policy (first layer: superuser)
+    # Admin access
     def can_access_admin(self) -> bool:
-        if self.is_superuser():
-            return True
-        return self.is_authenticated_active()
+        return self.has(Permission.ADMIN_ACCESS)
 
-    # Post permissions
+    # Post
     def can_view_post(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        return self.is_authenticated_active()
+        return self.has(Permission.POST_VIEW)
 
     def can_add_post(self) -> bool:
-        if self.is_superuser():
-            return True
-        return self.is_author()
+        return self.has(Permission.POST_ADD)
 
     def can_change_post(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        if obj is None:
-            return self.is_author()
-        return self.is_author() and getattr(obj, "author", None) == self.user
+        return self.has(Permission.POST_CHANGE_OWN) and (obj is None or self.is_owner(obj, "author"))
 
     def can_delete_post(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        if obj is None:
-            return self.is_author()
-        return self.is_author() and getattr(obj, "author", None) == self.user
+        return self.has(Permission.POST_DELETE_OWN) and (obj is None or self.is_owner(obj, "author"))
 
+    # Comment
+    def can_view_comment(self, obj=None) -> bool:
+        return self.has(Permission.COMMENT_VIEW)
+
+    def can_add_comment(self) -> bool:
+        return self.has(Permission.COMMENT_ADD)
+
+    def can_change_comment(self, obj=None) -> bool:
+        return self.has(Permission.COMMENT_CHANGE_OWN) and (obj is None or self.is_owner(obj, "user"))
+
+    def can_delete_comment(self, obj=None) -> bool:
+        return self.has(Permission.COMMENT_DELETE_OWN) and (obj is None or self.is_owner(obj, "user"))
+
+    # Readonly helpers used by admin UI
     def readonly_post_fields(self, obj=None, model=None):
-        if self.is_superuser():
+        # Admin: no readonly
+        if self.role() is Role.ADMIN:
             return []
-        # regular user always readonly
-        if not self.is_author():
+        # Non-authenticated and normal users: always readonly
+        if self.role() in {Role.ANON, Role.USER}:
             return [f.name for f in model._meta.fields] if model else []
-        # author viewing others' post is readonly
-        if obj is not None and getattr(obj, "author", None) != self.user:
+        # Author: readonly if editing someone else's post
+        if obj is not None and not self.is_owner(obj, "author"):
             return [f.name for f in model._meta.fields] if model else []
         return []
 
-    # Comment permissions
-    def can_view_comment(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        return self.is_authenticated_active()
-
-    def can_add_comment(self) -> bool:
-        return self.is_authenticated_active()
-
-    def can_change_comment(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        if obj is None:
-            # Access change views when authenticated (ownership enforced at object level)
-            return self.is_authenticated_active()
-        # Any authenticated user can change their own comments
-        return self.is_authenticated_active() and getattr(obj, "user", None) == self.user
-
-    def can_delete_comment(self, obj=None) -> bool:
-        if self.is_superuser():
-            return True
-        if obj is None:
-            # Allow delete access page for authenticated; enforce ownership for concrete objects
-            return self.is_authenticated_active()
-        # Any authenticated user can delete their own comments
-        return self.is_authenticated_active() and getattr(obj, "user", None) == self.user
-
     def readonly_comment_fields(self, obj=None, model=None):
-        if self.is_superuser():
+        if self.role() is Role.ADMIN:
             return []
-        # Regular users can edit their own comment; otherwise read-only
-        if obj is not None and getattr(obj, "user", None) != self.user:
+        # Users can edit their own comment; otherwise readonly
+        if obj is not None and not self.is_owner(obj, "user"):
             return [f.name for f in model._meta.fields] if model else []
         return []

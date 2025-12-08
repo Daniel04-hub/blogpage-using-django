@@ -2,7 +2,7 @@ from django.contrib import admin
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm
 from django.urls import path
-from . import admin_views
+from django.http import HttpResponse
 from .models import Post, Comment
 
 
@@ -203,10 +203,19 @@ class MyAdminSite(admin.AdminSite):
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            path('author-page/', admin_views.author_page),
-            path('user-page/', admin_views.user_page),
+            path('author-page/', author_page),
+            path('user-page/', user_page),
         ]
         return custom_urls + urls
+
+
+# Simple custom admin views
+def author_page(request):
+    return HttpResponse("Author page")
+
+
+def user_page(request):
+    return HttpResponse("User page")
 
 
 # Custom authentication form to remove 'staff' wording
