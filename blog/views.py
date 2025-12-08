@@ -8,6 +8,13 @@ from accounts.policies import Policy
 from django.contrib.auth import authenticate, login
 from .models import Post, Comment
 
+# Small helpers to keep views DRY
+def json_error(message, status):
+    return JsonResponse({"error": message}, status=status)
+
+def get_post_active(pk):
+    return get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+
 def post_list_api(request):
     posts = Post.objects.filter(
         deleted_at__isnull=True,
@@ -48,11 +55,11 @@ def post_detail_api(request, pk):
 def create_post_api(request):
     # Align with policy chain (superuser first, then author)
     if not Policy(request.user).can_add_post():
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return json_error("forbidden", 403)
     title = (request.POST.get("title") or "").strip()
     content = (request.POST.get("content") or "").strip()
     if not title or not content:
-        return JsonResponse({"error": "title and content required"}, status=400)
+        return json_error("title and content required", 400)
     post = Post.objects.create(
         author=request.user,
         title=title,
@@ -67,9 +74,9 @@ def create_post_api(request):
 @require_POST
 @login_required
 def update_post_api(request, pk):
-    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    post = get_post_active(pk)
     if not Policy(request.user).can_change_post(post):
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return json_error("forbidden", 403)
     title = request.POST.get("title")
     content = request.POST.get("content")
     status = request.POST.get("status")
@@ -87,9 +94,9 @@ def update_post_api(request, pk):
 @require_POST
 @login_required
 def delete_post_api(request, pk):
-    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    post = get_post_active(pk)
     if not Policy(request.user).can_delete_post(post):
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return json_error("forbidden", 403)
     post.soft_delete()
     post.updated_by = request.user.email
     post.save(update_fields=["updated_by", "deleted_at", "updated_at"])
@@ -100,9 +107,9 @@ def delete_post_api(request, pk):
 @login_required
 @permission_required("blog.publish_post", raise_exception=True)
 def publish_post_api(request, pk):
-    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+    post = get_post_active(pk)
     if not Policy(request.user).is_superuser() and post.author_id != request.user.id and not request.user.has_perm("blog.publish_post"):
-        return JsonResponse({"error": "forbidden"}, status=403)
+        return json_error("forbidden", 403)
     post.status = "published"
     post.updated_by = request.user.email
     post.save(update_fields=["status", "updated_by", "updated_at"])
@@ -114,14 +121,13 @@ def add_comment_api(request, pk):
     # Require authenticated active per policy chain
     p = Policy(request.user)
     if not p.is_authenticated_active():
-        return JsonResponse({"error": "authentication required"}, status=401)
-
-    post = get_object_or_404(Post, pk=pk, deleted_at__isnull=True)
+        return json_error("authentication required", 401)
+    post = get_post_active(pk)
     if post.status != "published":
-        return JsonResponse({"error": "comments allowed only on published posts"}, status=403)
+        return json_error("comments allowed only on published posts", 403)
     content = (request.POST.get('content') or '').strip()
     if not content:
-        return JsonResponse({"error": "content required"}, status=400)
+        return json_error("content required", 400)
 
     c = Comment.objects.create(
         post=post,
@@ -147,7 +153,7 @@ def session_login_api(request):
     password = request.POST.get('password') or ''
     user = authenticate(request, username=username, password=password)
     if not user or not user.is_active:
-        return JsonResponse({"error": "invalid credentials"}, status=401)
+        return json_error("invalid credentials", 401)
     login(request, user)
     return JsonResponse({"status": "ok", "user": username})
 
